@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>骨架評分系統</title>
+  <style>
+    canvas, video {
+      max-width: 45%;
+    }
+    #score {
+      font-size: 20px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>骨架評分系統</h1>
+
+  <div>
+    <label>上傳影片檔：</label>
+    <input type="file" id="videoUpload" accept="video/*" />
+  </div>
+  <br />
+  <video id="videoPlayer" controls></video>
+  <video id="webcam" autoplay muted playsinline></video>
+  <canvas id="outputCanvas"></canvas>
+  <div id="score">分數：0</div>
+  <button id="exportCSV">匯出 CSV</button>
+  <button id="showLowest">顯示最低分畫面</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script>
+    const videoUpload = document.getElementById('videoUpload');
+    const videoPlayer = document.getElementById('videoPlayer');
+    const webcam = document.getElementById('webcam');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('score');
+
+    let videoPose = null;
+    let webcamPose = null;
+    let scoreList = [];
+    let frameIndex = 0;
+
+    // 處理使用者影片上傳
+    videoUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        videoPlayer.src = URL.createObjectURL(file);
+        videoPlayer.play();
+      }
+    });
+
+    // 初始化 Pose
+    const pose = new Pose({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}` });
+    pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    pose.onResults(onPoseResults);
+
+    // 啟動攝影機
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+      webcam.srcObject = stream;
+      const cam = new Camera(webcam, {
+        onFrame: async () => {
+          await pose.send({ image: webcam });
+        },
+        width: 640,
+        height: 480
+      });
+      cam.start();
+    });
+
+    function onPoseResults(results) {
+      webcamPose = results.poseLandmarks;
+    }
+
+    // 比對骨架距離
+    function calcScore(pose1, pose2) {
+      if (!pose1 || !pose2) return 0;
+      let totalDist = 0, count = 0;
+      for (let i = 0; i < pose1.length; i++) {
+        const dx = pose1[i].x - pose2[i].x;
+        const dy = pose1[i].y - pose2[i].y;
+        totalDist += Math.sqrt(dx * dx + dy * dy);
+        count++;
+      }
+      const avg = totalDist / count;
+      return Math.max(0, 100 - avg * 500);
+    }
+
+    // 主迴圈：每幀比對
+    const processLoop = () => {
+      if (!videoPlayer.paused && !videoPlayer.ended) {
+        canvas.width = webcam.videoWidth;
+        canvas.height = webcam.videoHeight;
+        ctx.drawImage(webcam, 0, 0);
+
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = videoPlayer.videoWidth;
+        tmpCanvas.height = videoPlayer.videoHeight;
+        const tmpCtx = tmpCanvas.getContext('2d');
+        tmpCtx.drawImage(videoPlayer, 0, 0);
+
+        pose.send({ image: tmpCanvas }).then(result => {
+          videoPose = result.poseLandmarks;
+          const score = calcScore(webcamPose, videoPose).toFixed(1);
+          scoreDisplay.innerText = `分數：${score}`;
+          scoreList.push({ frame: frameIndex++, score: parseFloat(score) });
+        });
+      }
+      requestAnimationFrame(processLoop);
+    };
+    requestAnimationFrame(processLoop);
+
+    // 匯出 CSV
+    document.getElementById('exportCSV').addEventListener('click', () => {
+      let csv = 'Frame,Score\n';
+      scoreList.forEach(s => {
+        csv += `${s.frame},${s.score}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'scores.csv';
+      a.click();
+    });
+
+    // 顯示最低分畫面
+    document.getElementById('showLowest').addEventListener('click', () => {
+      if (scoreList.length === 0) return;
+      const lowest = scoreList.reduce((a, b) => a.score < b.score ? a : b);
+      alert(`最低分：${lowest.score}，Frame: ${lowest.frame}`);
+    });
+  </script>
+</body>
+</html>
